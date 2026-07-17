@@ -1,0 +1,82 @@
+{
+	"Name": "OpenStack Monitor",
+	"Version": "0.1.0.0",
+	"Author": "Phantas Weng",
+	"Actions": [
+		{
+			"Name": "Instance Status",
+			"UUID": "com.phantas-weng.openstack.status",
+			"Icon": "imgs/actions/status/icon",
+			"Tooltip": "Show the running status of an OpenStack instance. Press to refresh; hold for 0.8s to open the Horizon detail page.",
+			"PropertyInspectorPath": "ui/status.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/status/key",
+					"TitleAlignment": "bottom",
+					"FontSize": 20
+				}
+			]
+		},
+		{
+			"Name": "Instance Usage",
+			"UUID": "com.phantas-weng.openstack.metric",
+			"Icon": "imgs/actions/metric/icon",
+			"Tooltip": "Show the resource usage metric of an OpenStack instance. Press to refresh; hold for 0.8s to open the Horizon detail page.",
+			"PropertyInspectorPath": "ui/metric.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/metric/key",
+					"TitleAlignment": "bottom",
+					"FontSize": 20
+				}
+			]
+		},
+		{
+			"Name": "Instance Power",
+			"UUID": "com.phantas-weng.openstack.power",
+			"Icon": "imgs/actions/power/icon",
+			"Tooltip": "Show the instance power state; press to run a power action (start/stop/reboot). Hold for 0.8s to open the Horizon detail page.",
+			"PropertyInspectorPath": "ui/power.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/power/key",
+					"TitleAlignment": "bottom",
+					"FontSize": 20
+				}
+			]
+		}
+	],
+	"Category": "OpenStack Monitor",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Monitor and control OpenStack instances (status / resource usage / power).",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 3,
+	"Software": {
+		"MinimumVersion": "6.9"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "12"
+		},
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "20",
+		"Debug": "enabled"
+	},
+	"UUID": "com.phantas-weng.openstack"
+}

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+
+<head lang="en">
+  <title>Instance Status Settings</title>
+  <meta charset="utf-8" />
+  <script src="libs/sdpi-components.js"></script>
+</head>
+
+<body>
+  <!-- ── Connection settings (global settings, manually get/set via lifecycle in openstack-global.js) ── -->
+  <div id="openstack-connection"></div>
+
+  <hr />
+
+  <!-- ── This button's target (stored in action settings, keeping sdpi-components auto-binding) ── -->
+  <sdpi-item label="Instance ID">
+    <sdpi-textfield setting="serverId" placeholder="instance (server) UUID"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Display Name">
+    <sdpi-textfield setting="displayName" placeholder="Leave empty to use the instance name"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Update Interval (seconds)">
+    <sdpi-textfield setting="pollingSeconds" type="number" min="15" placeholder="60" default="60"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item>
+    <small style="color: #888; font-size: 12px; line-height: 1.5; font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);">
+      Hold for 0.8s to open the instance detail page using the Dashboard URL above.
+    </small>
+  </sdpi-item>
+
+  <script src="libs/openstack-global.js"></script>
+</body>
+
+</html>

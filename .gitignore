@@ -1,0 +1,20 @@
+.env
+.DS_Store
+# Node.js
+node_modules/
+.vscode/
+
+# Stream Deck files
+*.sdPlugin/bin
+*.sdPlugin/logs
+logs/
+
+# Packaged plugin build artifacts (distributed via GitHub Releases)
+*.streamDeckPlugin
+releases/
+
+# OpenStack credentials for verify script (never commit)
+clouds.yaml
+.openstack-creds
+app-cred-*.yaml
+app-cred-*.sh

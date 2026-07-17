@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+
+<head lang="en">
+  <title>Instance Power Settings</title>
+  <meta charset="utf-8" />
+  <script src="libs/sdpi-components.js"></script>
+</head>
+
+<body>
+  <!-- ── Connection settings (global settings, manually get/set via lifecycle in openstack-global.js) ── -->
+  <div id="openstack-connection"></div>
+
+  <hr />
+
+  <!-- ── This button's target and action (stored in action settings, keeping sdpi-components auto-binding) ── -->
+  <sdpi-item label="Instance ID">
+    <sdpi-textfield setting="serverId" placeholder="instance (server) UUID"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Press Action">
+    <sdpi-select setting="powerAction" default="toggle">
+      <option value="toggle">Toggle (on/off by state)</option>
+      <option value="start">Start</option>
+      <option value="stop">Stop</option>
+      <option value="reboot">Reboot (soft)</option>
+    </sdpi-select>
+  </sdpi-item>
+  <sdpi-item>
+    <small style="color: #888; font-size: 12px; line-height: 1.5; font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);">
+      <span style="font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;">⚠️</span> Power actions change the actual instance state. Make sure the selected instance is correct.
+    </small>
+  </sdpi-item>
+  <sdpi-item label="Display Name">
+    <sdpi-textfield setting="displayName" placeholder="Leave empty to use the instance name"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Update Interval (seconds)">
+    <sdpi-textfield setting="pollingSeconds" type="number" min="15" placeholder="60" default="60"></sdpi-textfield>
+  </sdpi-item>
+
+  <script src="libs/openstack-global.js"></script>
+</body>
+
+</html>

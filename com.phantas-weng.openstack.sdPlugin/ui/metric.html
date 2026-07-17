@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+
+<head lang="en">
+  <title>Instance Metric Settings</title>
+  <meta charset="utf-8" />
+  <script src="libs/sdpi-components.js"></script>
+</head>
+
+<body>
+  <!-- ── Connection settings (global settings, manually get/set via lifecycle in openstack-global.js) ── -->
+  <div id="openstack-connection"></div>
+
+  <hr />
+
+  <!-- ── This button's target (stored in action settings, keeping sdpi-components auto-binding) ── -->
+  <sdpi-item label="Instance ID">
+    <sdpi-textfield setting="serverId" placeholder="instance (server) UUID"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Metric">
+    <sdpi-select setting="metric" default="cpu_percent">
+      <option value="cpu_percent">CPU Usage (%)</option>
+      <option value="mem_percent">Memory Usage (%)</option>
+      <option value="mem_usage">Memory Used (GB)</option>
+      <option value="vcpus">vCPUs</option>
+      <option value="disk">Disk (GB)</option>
+      <option value="disk_io">Disk I/O (MB/s)</option>
+      <option value="net_io">Network I/O (MB/s)</option>
+    </sdpi-select>
+  </sdpi-item>
+  <!-- Disk / Disk I/O metrics only: pick a single disk or all of them; options come from the plugin (datasource).
+       The row is only visible while Metric = Disk or Disk I/O (toggled by the script below). -->
+  <sdpi-item label="Disk" id="disk-row" style="display: none;">
+    <sdpi-select setting="diskSelection" default="all" datasource="getDisks" show-refresh loading="Loading disks…"></sdpi-select>
+  </sdpi-item>
+  <sdpi-item label="Display Name">
+    <sdpi-textfield setting="displayName" placeholder="Leave empty to use the metric name"></sdpi-textfield>
+  </sdpi-item>
+  <sdpi-item label="Update Interval (seconds)">
+    <sdpi-textfield setting="pollingSeconds" type="number" min="15" placeholder="60" default="60"></sdpi-textfield>
+  </sdpi-item>
+
+  <script src="libs/openstack-global.js"></script>
+  <script>
+    // Show the Disk row only while Metric = Disk or Disk I/O.
+    (() => {
+      const row = document.getElementById("disk-row");
+      const metricEl = document.querySelector('sdpi-select[setting="metric"]');
+      const toggle = (value) => {
+        row.style.display = value === "disk" || value === "disk_io" ? "" : "none";
+      };
+      // React to user changes in this PI
+      metricEl.addEventListener("valuechange", () => toggle(metricEl.value));
+      // Initial state from the persisted settings
+      const client = window.SDPIComponents && window.SDPIComponents.streamDeckClient;
+      if (client) {
+        client
+          .getSettings()
+          .then((payload) => toggle((payload && payload.settings && payload.settings.metric) || "cpu_percent"))
+          .catch(() => {});
+      }
+    })();
+  </script>
+</body>
+
+</html>
