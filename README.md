@@ -3,6 +3,12 @@
 Monitor and control OpenStack instances right from your Stream Deck: **runtime status**, **resource usage**, and **power control**.
 Built for OpenStack deployments that only allow Google SSO login, it uses an **Application Credential** to bypass SSO and call the API directly.
 
+![OpenStack Monitor on Stream Deck MK.2](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-promo.png)
+
+![OpenStack Monitor runtime preview](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-preview.png)
+
+![Monitor multiple OpenStack instances](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-multi-instance.png)
+
 ## Features
 
 | Action | Display | Short press | Long press (0.8s) |
