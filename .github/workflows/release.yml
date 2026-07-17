@@ -1,0 +1,95 @@
+name: Release
+
+# Pushing a tag matching v* (e.g. v1.0.0.0) packages the plugin and creates a GitHub Release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create a Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # canvas is a native module and may compile from source; install its system deps first
+      - name: Install canvas build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libjpeg-dev \
+            libgif-dev \
+            librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run tests
+        run: yarn test
+
+      # The tag name without the leading v is the plugin version (v1.0.0.0 -> 1.0.0.0)
+      - name: Derive version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Extract this version's CHANGELOG section as the release note; the fallback below handles a miss
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          node scripts/extract-notes.mjs "${{ steps.version.outputs.value }}" > release-notes.md || true
+          if [ -s release-notes.md ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build bundle
+        run: yarn build:bundle
+
+      - name: Pack plugin
+        run: |
+          yarn streamdeck pack \
+            ./com.phantas-weng.openstack.sdPlugin \
+            --version "${{ steps.version.outputs.value }}" \
+            -o dist \
+            -f
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES_FOUND: ${{ steps.notes.outputs.found }}
+        run: |
+          # Note source: prefer the CHANGELOG section (--notes-file), fall back to GitHub-generated notes
+          if [ "$NOTES_FOUND" = "true" ]; then
+            NOTES_ARGS=(--notes-file release-notes.md)
+          else
+            NOTES_ARGS=(--generate-notes)
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # The release already exists (e.g. a re-run) → overwrite the asset and update the note
+            gh release upload "$GITHUB_REF_NAME" dist/*.streamDeckPlugin --clobber
+            if [ "$NOTES_FOUND" = "true" ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              dist/*.streamDeckPlugin \
+              --title "$GITHUB_REF_NAME" \
+              "${NOTES_ARGS[@]}"
+          fi

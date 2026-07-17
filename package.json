@@ -6,6 +6,7 @@
 	"license": "MIT",
 	"scripts": {
 		"build": "node scripts/build.mjs",
+		"bump": "node scripts/bump.mjs",
 		"clean": "rm -rf com.phantas-weng.openstack.sdPlugin/bin",
 		"build:bundle": "yarn clean && rollup -c",
 		"icons": "node scripts/generate-icons.mjs",
