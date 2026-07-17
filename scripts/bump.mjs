@@ -8,6 +8,7 @@ import {
 	buildChangelog,
 	computeNextVersion,
 	groupCommits,
+	parseCommitLines,
 	renderChangelogSection,
 	replaceManifestVersion,
 } from "./release-lib.mjs";
@@ -60,15 +61,29 @@ const lastVersionTag = () => {
 
 const commitsSince = (tag) => {
 	const range = tag ? [`${tag}..HEAD`] : ["HEAD"];
-	const out = capture("git", ["log", ...range, "--no-merges", "--pretty=format:%h%x09%s"]);
-	return out
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean)
-		.map((line) => {
-			const [hash, ...rest] = line.split("\t");
-			return { hash, subject: rest.join("\t") };
-		});
+	return parseCommitLines(capture("git", ["log", ...range, "--no-merges", "--pretty=format:%h%x09%s"]));
+};
+
+// Abort when the working tree has uncommitted changes: if bump runs before the
+// feature is committed, the tag points at a commit without that change and both
+// the release bundle and the note miss it (--force skips this check).
+const assertCleanWorkTree = (force) => {
+	const out = capture("git", ["status", "--porcelain"]).trim();
+	if (!out) {
+		return;
+	}
+	const lines = out.split("\n");
+	const untracked = lines.filter((line) => line.startsWith("??"));
+	const modified = lines.filter((line) => !line.startsWith("??"));
+	if (modified.length > 0 && !force) {
+		console.error("Working tree has uncommitted changes; commit (or stash) them before bumping, or they will be left out of the release:");
+		console.error(modified.map((line) => `  ${line}`).join("\n"));
+		console.error("(pass --force to skip this check)");
+		process.exit(1);
+	}
+	if (untracked.length > 0) {
+		console.warn(`Note: ${untracked.length} untracked file(s) will not be part of the release.`);
+	}
 };
 
 const askBump = async (currentVersion) => {
@@ -93,7 +108,12 @@ const askBump = async (currentVersion) => {
 const main = async () => {
 	const argv = process.argv.slice(2);
 	const dryRun = argv.includes("--dry-run");
+	const force = argv.includes("--force");
 	const positional = argv.filter((a) => !a.startsWith("--"));
+
+	if (!dryRun) {
+		assertCleanWorkTree(force);
+	}
 
 	const currentVersion = readManifestVersion();
 	const bumpArg = positional[0] ?? (await askBump(currentVersion));
@@ -108,6 +128,14 @@ const main = async () => {
 	const lastTag = lastVersionTag();
 	const groups = groupCommits(commitsSince(lastTag));
 	const section = renderChangelogSection(nextVersion, localDate(), groups);
+
+	// Nothing worth noting since the last tag → likely bumping before committing the
+	// feature; abort to avoid publishing an empty release (--force to override).
+	if (groups.length === 0 && !dryRun && !force) {
+		console.error(`No commits worth noting since ${lastTag ?? "the initial commit"} (the note would be "No notable changes").`);
+		console.error("Make sure the feature is committed; pass --force to publish an empty version anyway.");
+		process.exit(1);
+	}
 
 	if (dryRun) {
 		console.log(`[dry-run] ${currentVersion} → ${nextVersion} (tag ${tagName})`);

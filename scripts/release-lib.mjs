@@ -99,6 +99,21 @@ export const groupCommits = (commits) => {
 };
 
 /**
+ * Parse `git log --pretty=format:%h%x09%s` output into an array of {hash, subject}.
+ * Empty input yields an empty array; a tab inside the subject is preserved verbatim.
+ */
+export const parseCommitLines = (text) => {
+	return text
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.map((line) => {
+			const [hash, ...rest] = line.split("\t");
+			return { hash, subject: rest.join("\t") };
+		});
+};
+
+/**
  * Render a single version's Keep a Changelog section (ends with a single newline).
  */
 export const renderChangelogSection = (version, dateStr, groups) => {

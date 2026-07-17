@@ -5,6 +5,7 @@ import {
 	computeNextVersion,
 	extractVersionSection,
 	groupCommits,
+	parseCommitLines,
 	renderChangelogSection,
 	replaceManifestVersion,
 } from "../scripts/release-lib.mjs";
@@ -74,6 +75,22 @@ describe("groupCommits", () => {
 				entries: [{ description: "B", hash: "bbb" }],
 			},
 		]);
+	});
+});
+
+describe("parseCommitLines", () => {
+	it("parses hash-tab-subject lines into {hash, subject}", () => {
+		expect(parseCommitLines("aaa\tfeat: A\nbbb\tfix: B")).toEqual([
+			{ hash: "aaa", subject: "feat: A" },
+			{ hash: "bbb", subject: "fix: B" },
+		]);
+	});
+	it("empty or blank input yields an empty array", () => {
+		expect(parseCommitLines("")).toEqual([]);
+		expect(parseCommitLines("\n\n")).toEqual([]);
+	});
+	it("preserves a tab inside the subject", () => {
+		expect(parseCommitLines("aaa\tfeat: A\tB")).toEqual([{ hash: "aaa", subject: "feat: A\tB" }]);
 	});
 });
 
