@@ -1,6 +1,6 @@
 {
 	"name": "streamdeck-openstack",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "Stream Deck plugin to monitor and control OpenStack instances (status / resource usage / power).",
 	"author": "Phantas Weng",
 	"license": "MIT",

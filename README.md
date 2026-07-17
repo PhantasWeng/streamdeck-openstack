@@ -3,11 +3,31 @@
 Monitor and control OpenStack instances right from your Stream Deck: **runtime status**, **resource usage**, and **power control**.
 Built for OpenStack deployments that only allow Google SSO login, it uses an **Application Credential** to bypass SSO and call the API directly.
 
-![OpenStack Monitor on Stream Deck MK.2](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-promo.png)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Version](https://img.shields.io/badge/version-1.0.0.0-green.svg)
+![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)
+![Stream Deck](https://img.shields.io/badge/Stream%20Deck-6.9%2B-black.svg)
 
-![OpenStack Monitor runtime preview](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-preview.png)
+<p align="center">
+  <img src="com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-promo.png" alt="OpenStack Monitor on Stream Deck MK.2" width="720">
+</p>
 
-![Monitor multiple OpenStack instances](com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-multi-instance.png)
+<p align="center">
+  <img src="com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-preview.png" alt="OpenStack Monitor runtime preview" width="360">
+  <img src="com.phantas-weng.openstack.sdPlugin/imgs/plugin/marketplace/openstack-monitor-multi-instance.png" alt="Monitor multiple OpenStack instances" width="360">
+</p>
+
+<p align="center"><sub>Left: runtime status &amp; usage on a single key. Right: monitoring several instances at once.</sub></p>
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Prerequisites](#prerequisites)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Architecture](#architecture)
+- [License](#license)
 
 ## Features
 
@@ -18,6 +38,18 @@ Built for OpenStack deployments that only allow Google SSO login, it uses an **A
 | **Instance Power** | Power state (green / gray / orange) | Power on / off / reboot (configurable) | Open the Horizon detail page |
 
 Connection credentials are stored in the Stream Deck **global settings** and shared across all three button types. When monitoring multiple machines, each button only needs its own Instance ID — the credentials are entered once.
+
+## Installation
+
+**From a released build (recommended)**
+
+1. Download `com.phantas-weng.openstack.streamDeckPlugin` from the [GitHub Releases](https://github.com/PhantasWeng/streamdeck-openstack/releases) page.
+2. Double-click the downloaded file — Stream Deck installs the plugin automatically.
+3. Add any of the three **OpenStack Monitor** actions to a key and configure it (see [Configuration](#configuration)).
+
+**From source** — see [Development](#development) to build your own `.streamDeckPlugin` package.
+
+> Requires the Stream Deck app **6.9+** on macOS 12+ or Windows 10+.
 
 ## Prerequisites
 
@@ -48,7 +80,11 @@ yarn verify      # Verify connectivity to OpenStack using the OS_* environment v
 yarn icons       # Generate button icons
 yarn watch       # Watch source changes, then automatically rebuild and restart the plugin
 yarn build       # Package into a .streamDeckPlugin (output to releases/)
+yarn test        # Run the unit tests (vitest)
+yarn test:watch  # Run the unit tests in watch mode
 yarn lint        # Biome check
+yarn lint:fix    # Biome check with autofix
+yarn bump        # Bump version + regenerate CHANGELOG (see scripts/bump.mjs)
 ```
 
 ### Connection Verification
@@ -68,14 +104,19 @@ This runs the following checks in order: exchange for a token (bypassing SSO) �
 
 ```
 src/
-├── plugin.ts          # Register actions, listen for global settings changes
-├── settings.ts        # Settings types and utilities (connection = global, target = per-action)
-├── openstack.ts       # Keystone authentication (token caching) + Nova + Gnocchi clients
-├── metrics.ts         # Display item catalog and calculations (CPU%, memory%, etc.)
-├── rendering.ts       # Canvas rendering of button images
-└── actions/instance.ts# The three actions + shared polling / long-press framework
+├── plugin.ts           # Register actions, listen for global settings changes
+├── connection.ts       # Global connection-settings cache (populated via didReceiveGlobalSettings)
+├── settings.ts         # Settings types and utilities (connection = global, target = per-action)
+├── openstack.ts        # Keystone authentication (token caching) + Nova + Gnocchi clients
+├── metrics.ts          # Display item catalog and calculations (CPU%, memory%, etc.)
+├── rendering.ts        # Canvas rendering of button images
+└── actions/instance.ts # The three actions + shared polling / long-press framework
 ```
 
 - **Authentication**: Application Credential → Keystone token (cached, automatically refreshed before expiry).
+- **Connection settings**: cached in `connection.ts` and updated only via the `didReceiveGlobalSettings` event — polling reads the cache synchronously to avoid a `getGlobalSettings()` feedback loop that would make the keys flicker.
 - **Metrics**: sourced from Gnocchi. `cpu` is cumulative ns; utilization = `rate:mean` ÷ (granularity × vcpus × 1e9) × 100.
-```
+
+## License
+
+Released under the [MIT License](LICENSE). © 2026 Phantas Weng.
