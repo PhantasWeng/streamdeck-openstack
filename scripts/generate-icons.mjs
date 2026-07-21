@@ -4,12 +4,12 @@
  *
  *   - key (default button image, 72/144): full layout (dark background + label + divider + glyph)
  *   - icon (action list thumbnail, 20/40): a monochrome white glyph for Stream Deck to tint per theme
- *   - category-icon (28/56): monochrome white glyph
- *   - marketplace (144/288): dark background + brand glyph
+ *   - category-icon (28/56): monochrome white OpenStack logomark (Stream Deck tints it per theme)
+ *   - marketplace (256/512): dark background + official OpenStack logomark
  *
  * Run: yarn icons
  */
-import { createCanvas } from "canvas";
+import { createCanvas, loadImage } from "canvas";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,9 +23,16 @@ const ACCENT = {
 	status: "#34d399", // green
 	metric: "#60a5fa", // blue
 	power: "#34d399", // green
-	brand: "#e8663c", // brand orange
 };
 const LABEL = { status: "Status", metric: "Usage", power: "Power" };
+
+// Official OpenStack red + logomark path (single-path mark, viewBox 0 0 24 24).
+const OPENSTACK_RED = "#ed1844";
+const OPENSTACK_MARK =
+	"M18.575 9.29h5.418v5.42h-5.418zM0 9.29h5.419v5.42H0zm18.575 7.827a1.207 1.207 0 0 1-1.206 1.206H6.623a1.207 1.207 0 0 1-1.205-1.206v-.858H0v5.252a2.236 2.236 0 0 0 2.229 2.23h19.53A2.237 2.237 0 0 0 24 21.512V16.26h-5.425zM21.763.258H2.233a2.236 2.236 0 0 0-2.23 2.23V7.74h5.419v-.858a1.206 1.206 0 0 1 1.205-1.206h10.746a1.206 1.206 0 0 1 1.205 1.206v.858H24V2.487A2.237 2.237 0 0 0 21.763.258Z";
+// Rasterize at `px` (librsvg needs an explicit intrinsic size); use a large value so drawImage only ever downscales, staying crisp.
+const openstackMarkSvg = (color, px = 512) =>
+	`<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24"><path d="${OPENSTACK_MARK}" fill="${color}"/></svg>`;
 
 /** Dark rounded-corner background */
 const drawBg = (ctx, s) => {
@@ -99,21 +106,12 @@ const drawGlyph = (ctx, s, type, color, cyRatio = 0.5) => {
 		ctx.moveTo(u(0.5), u(0.28));
 		ctx.lineTo(u(0.5), u(0.52));
 		ctx.stroke();
-	} else if (type === "brand") {
-		// cloud + server bars
-		ctx.beginPath();
-		ctx.arc(u(0.4), u(0.42), u(0.13), 0, Math.PI * 2);
-		ctx.arc(u(0.58), u(0.4), u(0.16), 0, Math.PI * 2);
-		ctx.fill();
-		ctx.fillRect(u(0.3), u(0.48), u(0.4), u(0.06));
-		ctx.fillRect(u(0.28), u(0.6), u(0.44), u(0.1));
-		ctx.fillRect(u(0.28), u(0.74), u(0.44), u(0.1));
 	}
 	ctx.restore();
 };
 
 /**
- * @param variant "key" (dark background + label + glyph) | "mono" (transparent white glyph) | "brand" (dark background + brand glyph)
+ * @param variant "key" (dark background + label + glyph) | "mono" (transparent white glyph, for Stream Deck to tint)
  */
 const renderPng = (base, sizes, type, variant) => {
 	for (let i = 0; i < sizes.length; i++) {
@@ -125,14 +123,34 @@ const renderPng = (base, sizes, type, variant) => {
 			drawBg(ctx, s);
 			drawTopLabel(ctx, s, LABEL[type]);
 			drawGlyph(ctx, s, type, ACCENT[type], 0.64);
-		} else if (variant === "brand") {
-			drawBg(ctx, s);
-			drawGlyph(ctx, s, "brand", ACCENT.brand, 0.5);
 		} else {
 			// mono: transparent background + white glyph (for Stream Deck to tint)
-			drawGlyph(ctx, s, type === "category" ? "brand" : type, "#ffffff", 0.5);
+			drawGlyph(ctx, s, type, "#ffffff", 0.5);
 		}
 
+		const outBase = resolve(pluginDir, base);
+		if (!existsSync(dirname(outBase))) {
+			mkdirSync(dirname(outBase), { recursive: true });
+		}
+		writeFileSync(`${outBase}${i === 0 ? "" : "@2x"}.png`, canvas.toBuffer("image/png"));
+	}
+	console.log(`✓ ${base}  (${sizes.join(" / ")})`);
+};
+
+/**
+ * Render the official OpenStack logomark centered on a tile.
+ * @param bg true → dark rounded background; false → transparent (monochrome, for Stream Deck to tint)
+ */
+const renderMark = async (base, sizes, { color, bg, ratio }) => {
+	const mark = await loadImage(Buffer.from(openstackMarkSvg(color)));
+	for (let i = 0; i < sizes.length; i++) {
+		const s = sizes[i];
+		const canvas = createCanvas(s, s);
+		const ctx = canvas.getContext("2d");
+		if (bg) drawBg(ctx, s);
+		const m = s * ratio;
+		const off = (s - m) / 2;
+		ctx.drawImage(mark, off, off, m, m);
 		const outBase = resolve(pluginDir, base);
 		if (!existsSync(dirname(outBase))) {
 			mkdirSync(dirname(outBase), { recursive: true });
@@ -146,7 +164,8 @@ for (const type of ["status", "metric", "power"]) {
 	renderPng(`imgs/actions/${type}/icon`, [20, 40], type, "mono"); // action list thumbnail
 	renderPng(`imgs/actions/${type}/key`, [72, 144], type, "key"); // default button image
 }
-renderPng("imgs/plugin/category-icon", [28, 56], "category", "mono");
-renderPng("imgs/plugin/marketplace", [144, 288], "brand", "brand");
+// category-icon: white logomark on transparent; marketplace: red logomark on the dark tile
+await renderMark("imgs/plugin/category-icon", [28, 56], { color: "#ffffff", bg: false, ratio: 0.9 });
+await renderMark("imgs/plugin/marketplace", [256, 512], { color: OPENSTACK_RED, bg: true, ratio: 0.586 });
 
 console.log("Icon generation complete.");
