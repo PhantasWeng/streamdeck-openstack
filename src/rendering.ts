@@ -26,6 +26,7 @@ const ACCENT = {
 	red: "#f87171",
 	gray: "#8b95a3",
 	purple: "#a78bfa",
+	blue: "#60a5fa",
 };
 
 /** instance status → primary color (drawn on the central text, not a full background fill). Unlisted values use neutral gray. */
@@ -195,6 +196,170 @@ export const renderPower = (label: string, action: PowerActionKind): string => {
 	ctx.fillStyle = color;
 	ctx.font = "600 18px sans-serif";
 	ctx.fillText(text, SIZE / 2, 126, SIZE - 16);
+	return canvas.toDataURL();
+};
+
+/** Usage level → sparkline color; series without a level (e.g. Memory GB) fall back to blue */
+const sparklineColor = (level?: MetricLevel): string => (level ? LEVEL_COLOR[level] : ACCENT.blue);
+
+/** Trim text with a trailing ellipsis so it fits within maxWidth under the current ctx.font */
+const truncateToWidth = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string => {
+	if (maxWidth <= 0) {
+		return "";
+	}
+	if (ctx.measureText(text).width <= maxWidth) {
+		return text;
+	}
+	let t = text;
+	while (t.length > 0 && ctx.measureText(`${t}…`).width > maxWidth) {
+		t = t.slice(0, -1);
+	}
+	return t.length ? `${t}…` : "";
+};
+
+/**
+ * Draw the trend line (with faint area fill and an emphasized latest point) into the given plot box.
+ * Shared by the chart-dominant key and the number+mini-chart key.
+ */
+const drawSparkPath = (
+	ctx: CanvasRenderingContext2D,
+	series: number[],
+	color: string,
+	box: { x0: number; x1: number; yTop: number; yBot: number },
+	lineWidth: number,
+): void => {
+	const { x0, x1, yTop, yBot } = box;
+	const min = Math.min(...series);
+	const max = Math.max(...series);
+	const flat = max === min;
+	const n = series.length;
+	const px = (i: number): number => (n === 1 ? (x0 + x1) / 2 : x0 + ((x1 - x0) * i) / (n - 1));
+	// Flat series sit on a centered line; otherwise map min→bottom, max→top
+	const py = (v: number): number => (flat ? (yTop + yBot) / 2 : yBot - (yBot - yTop) * ((v - min) / (max - min)));
+
+	const trace = (): void => {
+		ctx.beginPath();
+		series.forEach((v, i) => {
+			const x = px(i);
+			const y = py(v);
+			if (i === 0) {
+				ctx.moveTo(x, y);
+			} else {
+				ctx.lineTo(x, y);
+			}
+		});
+	};
+
+	// Filled area under the line (faint)
+	trace();
+	ctx.save();
+	ctx.lineTo(px(n - 1), yBot);
+	ctx.lineTo(px(0), yBot);
+	ctx.closePath();
+	ctx.globalAlpha = 0.16;
+	ctx.fillStyle = color;
+	ctx.fill();
+	ctx.restore();
+
+	// The line itself
+	trace();
+	ctx.strokeStyle = color;
+	ctx.lineWidth = lineWidth;
+	ctx.lineJoin = "round";
+	ctx.lineCap = "round";
+	ctx.stroke();
+
+	// Emphasize the latest point
+	ctx.fillStyle = color;
+	ctx.beginPath();
+	ctx.arc(px(n - 1), py(series[n - 1]), lineWidth + 0.5, 0, Math.PI * 2);
+	ctx.fill();
+};
+
+/**
+ * Chart-dominant metric key: a trend line filling the key, with a compact label (top-left) and the
+ * current value (top-right). The value is measured first and the label is truncated to the space
+ * that remains, so the two never overlap regardless of label length.
+ *
+ * @param label     metric label drawn top-left (truncated with an ellipsis when too long)
+ * @param valueText the current formatted value (top-right)
+ * @param unit      unit appended to the current value (e.g. "%", "GB")
+ * @param series    recent values, oldest → newest (needs at least 2 points to form a line)
+ * @param level     usage level; tints the line/value (low/mid/high → green/yellow/red), else blue
+ */
+export const renderSparkline = (
+	label: string,
+	valueText: string,
+	unit: string,
+	series: number[],
+	level?: MetricLevel,
+): string => {
+	const { canvas, ctx } = newCanvas();
+	drawBackground(ctx, "#1f2937");
+	const color = sparklineColor(level);
+
+	// Header: current value (right) is laid out first; its width reserves space so the label can
+	// take the rest and be truncated if needed — this is what prevents the two from overlapping.
+	const LEFT = 12;
+	const RIGHT = SIZE - 12;
+	const GAP = 8;
+	const HEADER_Y = 22;
+	ctx.textBaseline = "middle";
+
+	// Value block (right-aligned): the number in the accent color, the unit smaller and muted beside it.
+	// A smaller unit keeps the block narrow so wide units (e.g. "MB/s") don't crowd out the label.
+	ctx.textAlign = "right";
+	let valueBlockWidth = 0;
+	if (unit) {
+		ctx.font = "600 12px sans-serif";
+		ctx.fillStyle = COLOR.idleLabel;
+		ctx.fillText(unit, RIGHT, HEADER_Y + 1);
+		valueBlockWidth += ctx.measureText(unit).width + 3;
+	}
+	ctx.font = "700 18px sans-serif";
+	ctx.fillStyle = color;
+	ctx.fillText(valueText, RIGHT - valueBlockWidth, HEADER_Y);
+	valueBlockWidth += ctx.measureText(valueText).width;
+
+	ctx.font = "600 14px sans-serif";
+	ctx.fillStyle = COLOR.idleLabel;
+	ctx.textAlign = "left";
+	ctx.fillText(truncateToWidth(ctx, label, RIGHT - valueBlockWidth - GAP - LEFT), LEFT, HEADER_Y);
+
+	drawSparkPath(ctx, series, color, { x0: LEFT, x1: RIGHT, yTop: 50, yBot: SIZE - 14 }, 3);
+	return canvas.toDataURL();
+};
+
+/**
+ * Number + mini-chart metric key: the top label and a large value (as in renderMetric), plus a small
+ * trend strip along the bottom. A middle ground between the plain number and the chart-dominant key.
+ */
+export const renderMetricWithSparkline = (
+	label: string,
+	valueText: string,
+	unit: string,
+	series: number[],
+	level?: MetricLevel,
+): string => {
+	const { canvas, ctx } = newCanvas();
+	drawBackground(ctx, "#1f2937");
+	drawTopLabel(ctx, label, true);
+	const color = sparklineColor(level);
+
+	// Value + inline unit, sitting above the trend strip
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	ctx.fillStyle = level ? LEVEL_COLOR[level] : COLOR.valueText;
+	ctx.font = "700 40px sans-serif";
+	ctx.fillText(valueText, SIZE / 2, 82, SIZE - 20);
+	if (unit) {
+		ctx.fillStyle = COLOR.idleLabel;
+		ctx.font = "600 15px sans-serif";
+		ctx.fillText(unit, SIZE / 2, 108, SIZE - 16);
+	}
+
+	// Mini trend strip along the bottom
+	drawSparkPath(ctx, series, color, { x0: 12, x1: SIZE - 12, yTop: 118, yBot: SIZE - 12 }, 2);
 	return canvas.toDataURL();
 };
 

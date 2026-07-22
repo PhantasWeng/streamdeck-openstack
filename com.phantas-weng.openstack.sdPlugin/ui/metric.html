@@ -33,6 +33,15 @@
   <sdpi-item label="Disk" id="disk-row" style="display: none;">
     <sdpi-select setting="diskSelection" default="all" datasource="getDisks" show-refresh loading="Loading disks…"></sdpi-select>
   </sdpi-item>
+  <!-- Layout: only meaningful for metrics that provide a history series (CPU% / Memory% / Memory GB);
+       hidden for the others, which are always shown as a number. Toggled by the script below. -->
+  <sdpi-item label="Layout" id="display-row" style="display: none;">
+    <sdpi-select setting="displayStyle" default="chart">
+      <option value="chart">Trend chart</option>
+      <option value="combo">Value + mini chart</option>
+      <option value="number">Value only</option>
+    </sdpi-select>
+  </sdpi-item>
   <sdpi-item label="Display Name">
     <sdpi-textfield setting="displayName" placeholder="Leave empty to use the metric name"></sdpi-textfield>
   </sdpi-item>
@@ -42,12 +51,16 @@
 
   <script src="libs/openstack-global.js"></script>
   <script>
-    // Show the Disk row only while Metric = Disk or Disk I/O.
+    // Show metric-specific rows: the Disk picker (Disk / Disk I/O) and the Layout picker
+    // (only metrics that have a history series: CPU% / Memory% / Memory GB).
     (() => {
-      const row = document.getElementById("disk-row");
+      const diskRow = document.getElementById("disk-row");
+      const displayRow = document.getElementById("display-row");
       const metricEl = document.querySelector('sdpi-select[setting="metric"]');
+      const CHART_METRICS = ["cpu_percent", "mem_percent", "mem_usage", "disk_io", "net_io"];
       const toggle = (value) => {
-        row.style.display = value === "disk" || value === "disk_io" ? "" : "none";
+        diskRow.style.display = value === "disk" || value === "disk_io" ? "" : "none";
+        displayRow.style.display = CHART_METRICS.includes(value) ? "" : "none";
       };
       // React to user changes in this PI
       metricEl.addEventListener("valuechange", () => toggle(metricEl.value));

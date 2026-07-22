@@ -32,7 +32,14 @@ import {
 	OpenStackAuthError,
 	serverAction,
 } from "../openstack";
-import { renderMessage, renderMetric, renderPower, renderStatus } from "../rendering";
+import {
+	renderMessage,
+	renderMetric,
+	renderMetricWithSparkline,
+	renderPower,
+	renderSparkline,
+	renderStatus,
+} from "../rendering";
 import {
 	type BaseActionSettings,
 	getButtonTitle,
@@ -243,6 +250,14 @@ export class InstanceMetric extends InstanceAction<MetricSettings> {
 			return renderMessage(["No", "data"]);
 		}
 		const label = getButtonTitle(settings, result.label ?? def.label);
+		// A trend line needs at least two history points; without them (or when the user picked "number"),
+		// fall back to the plain value. Items with no series never have one, so they stay numeric.
+		const style = settings.displayStyle ?? "chart";
+		if (result.series && result.series.length >= 2 && style !== "number") {
+			return style === "combo"
+				? renderMetricWithSparkline(label, result.text, result.unit, result.series, result.level)
+				: renderSparkline(label, result.text, result.unit, result.series, result.level);
+		}
 		return renderMetric(label, result.text, result.unit, result.level);
 	}
 

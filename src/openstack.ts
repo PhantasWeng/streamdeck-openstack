@@ -410,23 +410,81 @@ export const getMeasureById = async (
 	});
 
 /**
- * Generic: query the total I/O rate (bytes/sec) of a class of child resources under an instance. Returns null if there is no data.
+ * From raw Gnocchi measures ([[timestamp, granularity, value], …]), keep a single clean series:
+ * the endpoint mixes granularities when the archive policy defines several, so we group by
+ * granularity and keep the group with the most points (the finest resolution over its retention),
+ * sorted oldest → newest and capped at `maxPoints`.
+ */
+const pickFinestSeries = (measures: Array<[string, number, number]>, maxPoints: number): MetricSample[] => {
+	if (!measures.length) {
+		return [];
+	}
+	const byGranularity = new Map<number, MetricSample[]>();
+	for (const [timestamp, granularity, value] of measures) {
+		const group = byGranularity.get(granularity) ?? [];
+		group.push({ value, timestamp, granularity });
+		byGranularity.set(granularity, group);
+	}
+	let best: MetricSample[] = [];
+	for (const group of byGranularity.values()) {
+		if (group.length > best.length) {
+			best = group;
+		}
+	}
+	best.sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
+	return best.slice(-maxPoints);
+};
+
+/**
+ * Get a metric's full time series (for drawing a sparkline), by metric id. Returns [] when there is no data.
+ *
+ * @param aggregation Gnocchi aggregation method (e.g. "rate:mean"); defaults to the archive policy's default
+ * @param maxPoints   cap on returned points (a 144px key only shows so many); defaults to 48
+ */
+export const getMeasureSeries = async (
+	conn: OpenStackConnection,
+	metricId: string,
+	aggregation?: string,
+	maxPoints = 48,
+): Promise<MetricSample[]> =>
+	withToken(conn, async (bundle) => {
+		const gnocchi = findEndpoint(bundle.catalog, ["metric"], conn.regionName);
+		if (!gnocchi) {
+			throw new OpenStackApiError("This deployment does not provide the metric (Gnocchi) service");
+		}
+		const query = `refresh=true${aggregation ? `&aggregation=${encodeURIComponent(aggregation)}` : ""}`;
+		const res = await apiGet(`${gnocchi}/v1/metric/${metricId}/measures?${query}`, bundle.token);
+		if (res.status === 401) {
+			throw new OpenStackAuthError("Token has expired");
+		}
+		if (!res.ok) {
+			throw new OpenStackApiError(`Failed to query metric measures HTTP ${res.status}`);
+		}
+		return pickFinestSeries((await res.json()) as Array<[string, number, number]>, maxPoints);
+	});
+
+/**
+ * Generic: the total I/O rate history (bytes/sec, oldest → newest) of a class of child resources
+ * under an instance. Returns null if there is no data; the latest value is simply the last element.
  *
  * Disk/network I/O is attached to child resources (instance_disk / instance_network_interface, not instance),
  * and each instance may have several (multiple disks, multiple NICs); the corresponding metric is cumulative bytes.
- * Use rate:mean to get the delta over each granularity period, divide by granularity to get bytes/sec, then sum everything.
+ * Per child metric we take the rate:mean series, divide each point by its granularity to get bytes/sec, then
+ * sum across all children/metrics per timestamp so a point represents the whole instance at that moment.
  *
  * @param resourceType Gnocchi resource type (instance_disk / instance_network_interface)
  * @param metricNames  the cumulative-bytes metric names to sum (e.g. read+write, in+out)
  * @param matchName    optional filter on the child resource name (e.g. only the "vdb" disk); all resources when omitted
+ * @param maxPoints    cap on returned points; defaults to 48
  */
-const getResourceIoBytesPerSec = async (
+const getResourceIoSeriesBytesPerSec = async (
 	conn: OpenStackConnection,
 	serverId: string,
 	resourceType: string,
 	metricNames: string[],
 	matchName?: (name: string) => boolean,
-): Promise<number | null> =>
+	maxPoints = 48,
+): Promise<number[] | null> =>
 	withToken(conn, async (bundle) => {
 		const gnocchi = findEndpoint(bundle.catalog, ["metric"], conn.regionName);
 		if (!gnocchi) {
@@ -456,8 +514,8 @@ const getResourceIoBytesPerSec = async (
 		}>;
 		const resources = matchName ? all.filter((r) => matchName(r.name ?? r.original_resource_id ?? "")) : all;
 
-		/** Get a metric's latest rate:mean value, converted to bytes/sec */
-		const ratePerSec = async (metricId: string): Promise<number | null> => {
+		/** A metric's rate:mean series, each point converted to bytes/sec */
+		const ratePerSecSeries = async (metricId: string): Promise<MetricSample[]> => {
 			const r = await apiGet(
 				`${gnocchi}/v1/metric/${metricId}/measures?refresh=true&aggregation=rate:mean`,
 				bundle.token,
@@ -466,17 +524,13 @@ const getResourceIoBytesPerSec = async (
 				throw new OpenStackAuthError("Token has expired");
 			}
 			if (!r.ok) {
-				return null;
+				return [];
 			}
-			const m = (await r.json()) as Array<[string, number, number]>;
-			if (!Array.isArray(m) || !m.length) {
-				return null;
-			}
-			const [, granularity, value] = m[m.length - 1];
-			return granularity > 0 ? value / granularity : null;
+			return pickFinestSeries((await r.json()) as Array<[string, number, number]>, maxPoints);
 		};
 
-		let total = 0;
+		// Sum bytes/sec across every child resource + metric, keyed by timestamp so the series stays aligned
+		const byTimestamp = new Map<string, number>();
 		let got = false;
 		for (const resource of resources) {
 			for (const name of metricNames) {
@@ -484,26 +538,32 @@ const getResourceIoBytesPerSec = async (
 				if (!mid) {
 					continue;
 				}
-				const bps = await ratePerSec(mid);
-				if (bps != null) {
-					total += bps;
+				for (const sample of await ratePerSecSeries(mid)) {
+					if (sample.granularity <= 0) {
+						continue;
+					}
+					byTimestamp.set(sample.timestamp, (byTimestamp.get(sample.timestamp) ?? 0) + sample.value / sample.granularity);
 					got = true;
 				}
 			}
 		}
-		return got ? total : null;
+		if (!got) {
+			return null;
+		}
+		const sorted = [...byTimestamp.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+		return sorted.slice(-maxPoints).map(([, bps]) => bps);
 	});
 
 /**
- * Disk I/O rate (read+write, bytes/sec). Sums all virtual disks by default;
+ * Disk I/O rate history (read+write, bytes/sec, oldest → newest). Sums all virtual disks by default;
  * pass matchName to restrict to specific devices. Returns null if there is no data.
  */
-export const getDiskIoBytesPerSec = (
+export const getDiskIoSeriesBytesPerSec = (
 	conn: OpenStackConnection,
 	serverId: string,
 	matchName?: (name: string) => boolean,
-): Promise<number | null> =>
-	getResourceIoBytesPerSec(
+): Promise<number[] | null> =>
+	getResourceIoSeriesBytesPerSec(
 		conn,
 		serverId,
 		"instance_disk",
@@ -511,9 +571,9 @@ export const getDiskIoBytesPerSec = (
 		matchName,
 	);
 
-/** Network I/O rate (in+out across all NICs, bytes/sec). Returns null if there is no data. */
-export const getNetworkIoBytesPerSec = (conn: OpenStackConnection, serverId: string): Promise<number | null> =>
-	getResourceIoBytesPerSec(conn, serverId, "instance_network_interface", [
+/** Network I/O rate history (in+out across all NICs, bytes/sec, oldest → newest). Returns null if there is no data. */
+export const getNetworkIoSeriesBytesPerSec = (conn: OpenStackConnection, serverId: string): Promise<number[] | null> =>
+	getResourceIoSeriesBytesPerSec(conn, serverId, "instance_network_interface", [
 		"network.incoming.bytes",
 		"network.outgoing.bytes",
 	]);

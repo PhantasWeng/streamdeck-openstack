@@ -40,12 +40,23 @@ export type BaseActionSettings = {
 /** Status key settings */
 export type StatusSettings = BaseActionSettings;
 
+/** How the metric key draws its value; only affects items that provide a history series */
+export type MetricDisplayStyle = "chart" | "number" | "combo";
+
 /** metric key settings */
 export type MetricSettings = BaseActionSettings & {
 	/** The item to display, corresponding to a METRIC_CATALOG key in metrics.ts (cpu_percent / mem_percent / …) */
 	metric?: string;
 	/** Disk / Disk I/O metrics only: which disk to show — "all" (default), "root", or an attached volume id */
 	diskSelection?: string;
+	/**
+	 * Layout for items that have a history series (cpu% / memory% / memory GB):
+	 *   "chart"  — trend line filling the key, value in the corner (default)
+	 *   "combo"  — large value with a mini trend strip below
+	 *   "number" — value only (no chart)
+	 * Ignored by items without a series (always shown as a number).
+	 */
+	displayStyle?: MetricDisplayStyle;
 };
 
 /** Power key action type */

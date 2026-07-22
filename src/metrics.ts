@@ -12,9 +12,10 @@
  */
 import {
 	getAttachedVolumes,
-	getDiskIoBytesPerSec,
+	getDiskIoSeriesBytesPerSec,
 	getMeasureById,
-	getNetworkIoBytesPerSec,
+	getMeasureSeries,
+	getNetworkIoSeriesBytesPerSec,
 	getServer,
 	listInstanceMetrics,
 } from "./openstack";
@@ -30,15 +31,19 @@ type MetricDef = {
 	unit: string;
 };
 
-/** Selectable display items (used by the property inspector dropdown and the action) */
+/**
+ * Selectable display items. `label` is the default button title; it deliberately omits the unit
+ * (GB / % / I/O) because the unit already shows on the key — "Memory" + "GB" reads cleaner than
+ * "Memory GB" + "GB". The PI dropdown uses its own descriptive option text, so picking is still clear.
+ */
 export const METRIC_CATALOG: MetricDef[] = [
 	{ key: "cpu_percent", label: "CPU", unit: "%" },
-	{ key: "mem_percent", label: "Memory %", unit: "%" },
-	{ key: "mem_usage", label: "Memory GB", unit: "GB" },
+	{ key: "mem_percent", label: "Memory", unit: "%" },
+	{ key: "mem_usage", label: "Memory", unit: "GB" },
 	{ key: "vcpus", label: "vCPU", unit: "" },
 	{ key: "disk", label: "Disk", unit: "GB" },
-	{ key: "disk_io", label: "Disk I/O", unit: "MB/s" },
-	{ key: "net_io", label: "Network I/O", unit: "MB/s" },
+	{ key: "disk_io", label: "Disk", unit: "MB/s" },
+	{ key: "net_io", label: "Network", unit: "MB/s" },
 ];
 
 export const getMetricDef = (key: string | undefined): MetricDef | undefined =>
@@ -56,13 +61,25 @@ export type MetricResult = {
 	level?: MetricLevel;
 	/** Dynamic key title (e.g. "3 Disks"); overrides the catalog label, but a user displayName still wins */
 	label?: string;
+	/**
+	 * Recent history (oldest → newest) in the metric's own display scale, used to draw a sparkline.
+	 * Present for time-varying items (cpu%, memory%, memory GB, disk I/O, network I/O); undefined for
+	 * items where a trend line is meaningless (disk size, vCPU).
+	 */
+	series?: number[];
 };
 
 const percentText = (pct: number): string => (pct < 10 ? pct.toFixed(1) : String(Math.round(pct)));
 
+/** Clamp a percentage into 0–100 */
+const clampPct = (pct: number): number => Math.max(0, Math.min(100, pct));
+
+/** Bytes/sec → MB/s (the scale used for the I/O sparkline series) */
+const bpsToMbps = (bps: number): number => bps / (1024 * 1024);
+
 /** Format an I/O rate (bytes/sec) as MB/s text */
 const ioRateText = (bps: number): string => {
-	const mbps = bps / (1024 * 1024);
+	const mbps = bpsToMbps(bps);
 	return mbps < 10 ? mbps.toFixed(1) : String(Math.round(mbps));
 };
 
@@ -81,8 +98,12 @@ export const resolveMetric = async (
 ): Promise<MetricResult | null> => {
 	// Disk/network I/O comes from child resources (queried via search), no listInstanceMetrics needed
 	if (def.key === "net_io") {
-		const bps = await getNetworkIoBytesPerSec(conn, serverId);
-		return bps == null ? null : { text: ioRateText(bps), unit: def.unit };
+		const seriesBps = await getNetworkIoSeriesBytesPerSec(conn, serverId);
+		if (!seriesBps?.length) {
+			return null;
+		}
+		const currentBps = seriesBps[seriesBps.length - 1];
+		return { text: ioRateText(currentBps), unit: def.unit, series: seriesBps.map(bpsToMbps) };
 	}
 	if (def.key === "disk_io") {
 		const selection = diskSelection?.trim() || "all";
@@ -99,18 +120,22 @@ export const resolveMetric = async (
 				// Root = every disk that is not an attached volume (boot-from-volume then matches nothing → null)
 				const volDevices = volumes.map((v) => deviceTail(v.device)).filter(Boolean);
 				matchDevice = (name) => !volDevices.some((d) => matches(name, d));
-				label = "Root I/O";
+				label = "Root";
 			} else {
 				const device = deviceTail(volumes.find((v) => v.id === selection)?.device ?? "");
 				if (!device) {
 					return null;
 				}
 				matchDevice = (name) => matches(name, device);
-				label = `${device} I/O`;
+				label = device;
 			}
 		}
-		const bps = await getDiskIoBytesPerSec(conn, serverId, matchDevice);
-		return bps == null ? null : { text: ioRateText(bps), unit: def.unit, label };
+		const seriesBps = await getDiskIoSeriesBytesPerSec(conn, serverId, matchDevice);
+		if (!seriesBps?.length) {
+			return null;
+		}
+		const currentBps = seriesBps[seriesBps.length - 1];
+		return { text: ioRateText(currentBps), unit: def.unit, label, series: seriesBps.map(bpsToMbps) };
 	}
 
 	const ids = await listInstanceMetrics(conn, serverId);
@@ -121,8 +146,8 @@ export const resolveMetric = async (
 			if (!cpuId) {
 				return null;
 			}
-			const cpu = await getMeasureById(conn, cpuId, "rate:mean");
-			if (!cpu) {
+			const cpuSeries = await getMeasureSeries(conn, cpuId, "rate:mean");
+			if (!cpuSeries.length) {
 				return null;
 			}
 			// vcpus is used to convert to "whole-machine usage"; falls back to a single-core baseline when the vcpus metric is missing
@@ -133,36 +158,45 @@ export const resolveMetric = async (
 					vcpus = v.value;
 				}
 			}
-			const capacityNs = cpu.granularity * 1e9 * vcpus;
-			const pct = Math.max(0, Math.min(100, capacityNs > 0 ? (cpu.value / capacityNs) * 100 : 0));
-			return { text: percentText(pct), unit: def.unit, level: percentLevel(pct) };
+			// Each sample carries its own granularity; capacity = granularity(s) × vcpus × 1e9 ns
+			const series = cpuSeries.map((s) => {
+				const capacityNs = s.granularity * 1e9 * vcpus;
+				return clampPct(capacityNs > 0 ? (s.value / capacityNs) * 100 : 0);
+			});
+			const pct = series[series.length - 1];
+			return { text: percentText(pct), unit: def.unit, level: percentLevel(pct), series };
 		}
 
 		case "mem_percent": {
 			if (!ids["memory.usage"] || !ids.memory) {
 				return null;
 			}
-			const [usage, total] = await Promise.all([
-				getMeasureById(conn, ids["memory.usage"]),
+			// Total RAM (flavor memory) is effectively constant, so only the usage series varies:
+			// pct[i] = usage[i] / total × 100
+			const [usageSeries, total] = await Promise.all([
+				getMeasureSeries(conn, ids["memory.usage"]),
 				getMeasureById(conn, ids.memory),
 			]);
-			if (!usage || !total || total.value <= 0) {
+			if (!usageSeries.length || !total || total.value <= 0) {
 				return null;
 			}
-			const pct = (usage.value / total.value) * 100;
-			return { text: percentText(pct), unit: def.unit, level: percentLevel(pct) };
+			const series = usageSeries.map((s) => clampPct((s.value / total.value) * 100));
+			const pct = series[series.length - 1];
+			return { text: percentText(pct), unit: def.unit, level: percentLevel(pct), series };
 		}
 
 		case "mem_usage": {
 			if (!ids["memory.usage"]) {
 				return null;
 			}
-			const usage = await getMeasureById(conn, ids["memory.usage"]);
-			if (!usage) {
+			const usageSeries = await getMeasureSeries(conn, ids["memory.usage"]);
+			if (!usageSeries.length) {
 				return null;
 			}
 			// MB → GB
-			return { text: (usage.value / 1024).toFixed(1), unit: def.unit };
+			const series = usageSeries.map((s) => s.value / 1024);
+			const current = series[series.length - 1];
+			return { text: current.toFixed(1), unit: def.unit, series };
 		}
 
 		case "vcpus": {
@@ -188,7 +222,7 @@ export const resolveMetric = async (
 
 			const selection = diskSelection?.trim() || "all";
 			if (selection === "root") {
-				return root ? { text: String(Math.round(root.value)), unit: def.unit, label: "Root Disk" } : null;
+				return root ? { text: String(Math.round(root.value)), unit: def.unit, label: "Root" } : null;
 			}
 			if (selection !== "all") {
 				// A specific attached volume (returns null when it has been detached since)
