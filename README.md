@@ -4,7 +4,7 @@ Monitor and control OpenStack instances right from your Stream Deck: **runtime s
 Built for OpenStack deployments that only allow Google SSO login, it uses an **Application Credential** to bypass SSO and call the API directly.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0.0-green.svg)
+![Version](https://img.shields.io/badge/version-1.1.0.0-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)
 ![Stream Deck](https://img.shields.io/badge/Stream%20Deck-6.9%2B-black.svg)
 
@@ -34,10 +34,26 @@ Built for OpenStack deployments that only allow Google SSO login, it uses an **A
 | Action | Display | Short press | Long press (0.8s) |
 |--------|---------|-------------|-------------------|
 | **Instance Status** | Running / Shut off / Error… (color-coded by status) | Refresh | Open the Horizon detail page |
-| **Instance Usage** | CPU% / Memory% / Memory usage / vCPU / Disk | Refresh | Open the Horizon detail page |
+| **Instance Usage** | CPU% / Memory% / Memory / vCPU / Disk / Disk I/O / Network I/O — as a number or a trend chart | Refresh | Open the Horizon detail page |
 | **Instance Power** | Power state (green / gray / orange) | Power on / off / reboot (configurable) | Open the Horizon detail page |
 
 Connection credentials are stored in the Stream Deck **global settings** and shared across all three button types. When monitoring multiple machines, each button only needs its own Instance ID — the credentials are entered once.
+
+### Usage trends
+
+Time-varying metrics can be drawn as a **sparkline** so you see the recent trend at a glance, not just the current value. The history comes straight from Gnocchi, so a key shows its full trend the moment you add it. CPU% and Memory% are tinted by load (green → yellow → red).
+
+<p align="center">
+  <img src="docs/media/usage-trends.png" alt="Usage keys showing CPU, Memory, Disk I/O and Network I/O as live trend charts" width="760">
+</p>
+
+Pick the layout per key in the Property Inspector's **Layout** dropdown — the same metric, three ways:
+
+<p align="center">
+  <img src="docs/media/usage-layouts.png" alt="The same Memory metric shown as a trend chart, a value with a mini chart, and a plain value" width="620">
+</p>
+
+The title deliberately omits the unit (`Memory`, not `Memory GB`) since the unit already shows on the key. Metrics whose value barely changes — Disk capacity and vCPU — always render as a plain number.
 
 ## Installation
 
@@ -69,6 +85,8 @@ In the Property Inspector of any button, fill in the following (connection setti
 - **Region**: e.g. `RegionOne` (may be left empty)
 - **Instance ID**: the UUID of the target server
 - **Dashboard URL**: used to open the detail page on long press, e.g. `https://<horizon-host>/dashboard` (leave empty to disable open-on-long-press)
+
+For the **Instance Usage** button there are two extra per-key options: **Metric** (which value to show) and, for metrics that support a trend, **Layout** (`Trend chart` / `Value + mini chart` / `Value only`).
 
 > If the API endpoint is on an internal network (e.g. `192.168.x.x`), the computer running Stream Deck must be on the same network (or connected via VPN).
 
