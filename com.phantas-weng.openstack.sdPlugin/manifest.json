@@ -41,7 +41,7 @@
 			"Name": "Instance Power",
 			"UUID": "com.phantas-weng.openstack.power",
 			"Icon": "imgs/actions/power/icon",
-			"Tooltip": "Show the instance power state; press to run a power action (start/stop/reboot). Hold for 0.8s to open the Horizon detail page.",
+			"Tooltip": "Show the instance power state. Hold 0.8s to arm, then tap within 5s to confirm the action (start/stop/reboot). A single tap just reminds you to hold.",
 			"PropertyInspectorPath": "ui/power.html",
 			"Controllers": [
 				"Keypad"

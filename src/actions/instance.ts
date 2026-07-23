@@ -33,11 +33,13 @@ import {
 	serverAction,
 } from "../openstack";
 import {
+	type PowerActionKind,
 	renderMessage,
 	renderMetric,
 	renderMetricLoading,
 	renderMetricWithSparkline,
 	renderPower,
+	renderPowerConfirm,
 	renderSparkline,
 	renderStatus,
 } from "../rendering";
@@ -62,6 +64,8 @@ type ButtonRuntime = {
 	timer?: ReturnType<typeof setTimeout>;
 	pressTimer?: ReturnType<typeof setTimeout>;
 	disposed: boolean;
+	/** While true, poll() paints nothing — used to hold the power confirmation countdown on screen */
+	armed?: boolean;
 };
 
 const runtimes = new Map<string, ButtonRuntime>();
@@ -169,6 +173,7 @@ const CYCLE_FETCH_DEBOUNCE_MS = 300;
 type AnyEvent<S extends BaseActionSettings> =
 	| WillAppearEvent<S>
 	| DidReceiveSettingsEvent<S>
+	| KeyDownEvent<S>
 	| KeyUpEvent<S>;
 
 /**
@@ -204,7 +209,7 @@ abstract class InstanceAction<S extends BaseActionSettings> extends SingletonAct
 		clearPressTimer(r);
 		r.pressTimer = setTimeout(() => {
 			r.pressTimer = undefined;
-			void this.openDashboard(ev.payload.settings);
+			void this.onLongPress(ev);
 		}, LONG_PRESS_DURATION);
 	}
 
@@ -220,6 +225,11 @@ abstract class InstanceAction<S extends BaseActionSettings> extends SingletonAct
 	/** Default short-press behavior: refresh. Subclasses (power) may override. */
 	protected async onShortPress(ev: KeyUpEvent<S>): Promise<void> {
 		await this.poll(ev);
+	}
+
+	/** Default long-press behavior: open the Horizon page. The power key overrides this to arm a confirmation. */
+	protected async onLongPress(ev: KeyDownEvent<S>): Promise<void> {
+		await this.openDashboard(ev.payload.settings);
 	}
 
 	protected async openDashboard(settings: S): Promise<void> {
@@ -246,6 +256,10 @@ abstract class InstanceAction<S extends BaseActionSettings> extends SingletonAct
 	protected async poll(ev: AnyEvent<S>): Promise<void> {
 		const r = getRuntime(ev.action.id);
 		const settings = ev.payload.settings;
+		// Armed = a power confirmation countdown owns the screen; don't let a poll overwrite it
+		if (r.armed) {
+			return;
+		}
 		try {
 			const conn = getConnection();
 			if (r.disposed) {
@@ -444,7 +458,20 @@ export class InstanceMetric extends InstanceAction<MetricSettings> {
 	}
 }
 
-/** Power key: displays the power state; a short press runs a power action */
+/** Running confirmation countdown per power key (action.id → interval), so the arm can be cancelled/replaced */
+const powerArms = new Map<string, ReturnType<typeof setInterval>>();
+/** Last action the power key displayed, keyed by instance id — lets arming show it without a fresh fetch */
+const lastPowerAction = new Map<string, PowerActionKind>();
+/** Confirmation window: press to confirm within this many seconds, or it auto-cancels */
+const POWER_CONFIRM_SECONDS = 5;
+
+/**
+ * Power key: because a power action is destructive, it is guarded by a two-step confirmation.
+ *   - short press (idle): a reminder to hold, so a stray tap never runs anything
+ *   - long press (0.8s): arm — start a 5s countdown showing the pending action
+ *   - short press (armed): confirm — actually send the command
+ *   - countdown elapses: auto-cancel back to the normal display
+ */
 @action({ UUID: `${UUID_PREFIX}.power` })
 export class InstancePower extends InstanceAction<PowerSettings> {
 	protected readonly defaultLabel = "Power";
@@ -452,16 +479,81 @@ export class InstancePower extends InstanceAction<PowerSettings> {
 	protected async fetchImage(conn: OpenStackConnection, settings: PowerSettings, serverId: string): Promise<string> {
 		const server = await getServer(conn, serverId);
 		const label = getButtonTitle(settings, server.name || this.defaultLabel);
-		// A task in progress → busy; otherwise show the action that a press would run
-		if (server.taskState !== null) {
-			return renderPower(label, "busy");
-		}
 		const running = server.powerState === 1;
-		const action = resolvePowerAction(settings.powerAction ?? "toggle", running);
-		return renderPower(label, action ?? (running ? "stop" : "start"));
+		// A task in progress → busy; otherwise show the action a confirm would run
+		const displayed: PowerActionKind =
+			server.taskState !== null
+				? "busy"
+				: (resolvePowerAction(settings.powerAction ?? "toggle", running) ?? (running ? "stop" : "start"));
+		lastPowerAction.set(serverId, displayed); // cache so arming can label the countdown without refetching
+		return renderPower(label, displayed);
+	}
+
+	/** Long press arms the confirmation instead of opening the dashboard (overrides the base) */
+	protected override async onLongPress(ev: KeyDownEvent<PowerSettings>): Promise<void> {
+		const settings = ev.payload.settings;
+		const conn = getConnection();
+		const serverId = settings.serverId?.trim();
+		if (!isReady(conn, settings) || !serverId) {
+			return; // nothing configured to run; the idle poll already shows the setup hint
+		}
+		const id = ev.action.id;
+		const r = getRuntime(id);
+		r.armed = true; // poll() now paints nothing, so the countdown stays on screen
+		clearTimer(r); // pause the recurring poll for the duration of the countdown
+		const existing = powerArms.get(id);
+		if (existing) {
+			clearInterval(existing);
+		}
+		const action = powerConfirmAction(settings, lastPowerAction.get(serverId));
+		let seconds = POWER_CONFIRM_SECONDS;
+		await ev.action.setImage(renderPowerConfirm(action, seconds, POWER_CONFIRM_SECONDS));
+		const interval = setInterval(() => {
+			seconds -= 1;
+			if (seconds <= 0) {
+				this.clearArm(id);
+				this.startMonitoring(ev); // window elapsed → cancel and resume the normal display
+				return;
+			}
+			void ev.action.setImage(renderPowerConfirm(action, seconds, POWER_CONFIRM_SECONDS));
+		}, 1000);
+		powerArms.set(id, interval);
 	}
 
 	protected override async onShortPress(ev: KeyUpEvent<PowerSettings>): Promise<void> {
+		const id = ev.action.id;
+		if (powerArms.has(id)) {
+			// Armed → this tap confirms and sends the command
+			this.clearArm(id);
+			await this.runPowerAction(ev);
+			return;
+		}
+		// Not armed → a plain tap must never run a destructive action; remind the user to hold
+		await ev.action.setImage(renderMessage(["Hold", "to run"]));
+		setTimeout(() => void this.poll(ev), 1500);
+	}
+
+	override onWillDisappear(ev: WillDisappearEvent<PowerSettings>): void {
+		const interval = powerArms.get(ev.action.id);
+		if (interval) {
+			clearInterval(interval);
+			powerArms.delete(ev.action.id);
+		}
+		super.onWillDisappear(ev);
+	}
+
+	/** Stop the confirmation countdown and let poll() paint again */
+	private clearArm(id: string): void {
+		const interval = powerArms.get(id);
+		if (interval) {
+			clearInterval(interval);
+			powerArms.delete(id);
+		}
+		getRuntime(id).armed = false;
+	}
+
+	/** Resolve the action against the live state and send it (used once the user confirms) */
+	private async runPowerAction(ev: KeyUpEvent<PowerSettings>): Promise<void> {
 		const settings = ev.payload.settings;
 		const conn = getConnection();
 		const serverId = settings.serverId?.trim();
@@ -470,7 +562,7 @@ export class InstancePower extends InstanceAction<PowerSettings> {
 			return;
 		}
 		try {
-			// Check the current state first to decide the action (for toggle, start/stop based on power_state)
+			// Re-check the current state at confirm time (for toggle, start/stop based on power_state)
 			const server = await getServer(conn, serverId);
 			const running = server.powerState === 1;
 			const action = resolvePowerAction(settings.powerAction ?? "toggle", running);
@@ -506,4 +598,20 @@ const resolvePowerAction = (
 		default:
 			return running ? "stop" : "start";
 	}
+};
+
+/**
+ * The action to show during the confirmation countdown. Explicit preferences map directly; "toggle"
+ * uses the last displayed action when known (start/stop), falling back to "stop" when unknown (e.g.
+ * the key was armed before its first poll). The command actually sent is re-resolved at confirm time.
+ */
+const powerConfirmAction = (
+	settings: PowerSettings,
+	last: PowerActionKind | undefined,
+): "start" | "stop" | "reboot" => {
+	const pref = settings.powerAction ?? "toggle";
+	if (pref === "start" || pref === "stop" || pref === "reboot") {
+		return pref;
+	}
+	return last === "start" || last === "stop" || last === "reboot" ? last : "stop";
 };

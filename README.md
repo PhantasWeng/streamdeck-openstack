@@ -35,7 +35,7 @@ Built for OpenStack deployments that only allow Google SSO login, it uses an **A
 |--------|---------|-------------|-------------------|
 | **Instance Status** | Running / Shut off / Error… (color-coded by status) | Refresh | Open the Horizon detail page |
 | **Instance Usage** | CPU% / Memory% / Memory / vCPU / Disk / Disk I/O / Network I/O — as a number or a trend chart | Refresh | Open the Horizon detail page |
-| **Instance Power** | Power state (green / gray / orange) | Power on / off / reboot (configurable) | Open the Horizon detail page |
+| **Instance Power** | Power state (green / gray / orange) | Confirm the armed action — a plain tap only reminds you to hold | Arm: start a 5-second "tap to confirm" countdown (start / stop / reboot, configurable) |
 
 Connection credentials are stored in the Stream Deck **global settings** and shared across all three button types. When monitoring multiple machines, each button only needs its own Instance ID — the credentials are entered once.
 

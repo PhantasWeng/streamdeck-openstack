@@ -199,6 +199,64 @@ export const renderPower = (label: string, action: PowerActionKind): string => {
 	return canvas.toDataURL();
 };
 
+/**
+ * Power confirmation key: shown after a long press arms a power action. The pending action (colored)
+ * sits on top, a large countdown fills the center, and a hint tells the user a tap now confirms.
+ * A shrinking ring around the number echoes the remaining time.
+ *
+ * @param action  the action that will run on confirm (start / stop / reboot)
+ * @param seconds seconds remaining in the confirmation window
+ * @param total   the full window length, for the ring's proportion
+ */
+export const renderPowerConfirm = (
+	action: Exclude<PowerActionKind, "busy">,
+	seconds: number,
+	total: number,
+): string => {
+	const { canvas, ctx } = newCanvas();
+	drawBackground(ctx, "#1f2937");
+	const { text, color } = POWER_ACTION[action];
+
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+
+	// Pending action (what a confirm will do)
+	ctx.fillStyle = color;
+	ctx.font = "700 24px sans-serif";
+	ctx.fillText(`${text}?`, SIZE / 2, 30, SIZE - 16);
+	ctx.strokeStyle = "rgba(255,255,255,0.16)";
+	ctx.lineWidth = 2;
+	ctx.beginPath();
+	ctx.moveTo(28, 52);
+	ctx.lineTo(SIZE - 28, 52);
+	ctx.stroke();
+
+	// Countdown ring (remaining time) + number
+	const cx = SIZE / 2;
+	const cy = 90;
+	const radius = 26;
+	const fraction = Math.max(0, Math.min(1, total > 0 ? seconds / total : 0));
+	ctx.strokeStyle = "rgba(255,255,255,0.12)";
+	ctx.lineWidth = 4;
+	ctx.beginPath();
+	ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+	ctx.stroke();
+	ctx.strokeStyle = color;
+	ctx.lineCap = "round";
+	ctx.beginPath();
+	ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction);
+	ctx.stroke();
+	ctx.fillStyle = color;
+	ctx.font = "700 34px sans-serif";
+	ctx.fillText(String(seconds), cx, cy + 1);
+
+	// Confirm hint
+	ctx.fillStyle = COLOR.idleLabel;
+	ctx.font = "600 14px sans-serif";
+	ctx.fillText("tap to confirm", cx, 130, SIZE - 12);
+	return canvas.toDataURL();
+};
+
 /** Usage level → sparkline color; series without a level (e.g. Memory GB) fall back to blue */
 const sparklineColor = (level?: MetricLevel): string => (level ? LEVEL_COLOR[level] : ACCENT.blue);
 
