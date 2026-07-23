@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.0.0] - 2026-07-23
+
+### Features
+
+- guard the power key with a hold-to-arm, tap-to-confirm flow (83f026d)
+- cycle through disks on press for the Disk / Disk I/O keys (cb6e7be)
+
+### Documentation
+
+- document usage trend charts and layout options in the README (a65dc0f)
+
 ## [1.1.0.0] - 2026-07-22
 
 ### Features
