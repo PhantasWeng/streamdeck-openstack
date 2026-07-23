@@ -35,6 +35,7 @@ import {
 import {
 	renderMessage,
 	renderMetric,
+	renderMetricLoading,
 	renderMetricWithSparkline,
 	renderPower,
 	renderSparkline,
@@ -97,6 +98,73 @@ const clearPressTimer = (r: ButtonRuntime): void => {
 
 /** Read the connection settings (from connection.ts's cache, synchronous; avoids calling getGlobalSettings inside poll to prevent event cascades) */
 const getConnection = (): OpenStackConnection => getCachedConnection();
+
+/** label = PI dropdown text; title = short form drawn on the key during a cycle switch */
+type DiskItem = { label: string; value: string; title: string };
+
+/**
+ * Ordered disk selections for an instance: "All disks", then the root disk (unless boot-from-volume),
+ * then each attached volume. Shared by the PI's Disk dropdown and the press-to-cycle behavior, so the
+ * cycle order matches the dropdown order exactly. The caller must have a complete connection.
+ */
+const buildDiskItems = async (conn: OpenStackConnection, serverId: string): Promise<DiskItem[]> => {
+	const items: DiskItem[] = [{ label: "All disks", value: "all", title: "All" }];
+	const [ids, vols, server] = await Promise.all([
+		listInstanceMetrics(conn, serverId).catch(() => ({}) as Record<string, string>),
+		getAttachedVolumes(conn, serverId).catch(() => null),
+		getServer(conn, serverId).catch(() => null),
+	]);
+	const rootId = ids["disk.root.size"];
+	// Boot-from-volume: the flavor root disk is phantom (the boot disk is a volume) — no Root option
+	if (rootId && server && !server.bootFromVolume) {
+		const root = await getMeasureById(conn, rootId).catch(() => null);
+		if (root && root.value > 0) {
+			items.push({ label: `Root disk · ${Math.round(root.value)} GB`, value: "root", title: "Root" });
+		}
+	}
+	for (const v of vols?.volumes ?? []) {
+		const device = v.device.split("/").pop() ?? "";
+		const name = device || v.name || v.id.slice(0, 8);
+		items.push({ label: `${name} · ${v.sizeGb} GB`, value: v.id, title: name });
+	}
+	return items;
+};
+
+/**
+ * Disk list cache, keyed by instance id. Populated on appear and after each cycle so that pressing
+ * can pick the next disk instantly (no network) — the press-to-cycle latency is what made switching
+ * feel laggy. Disks change rarely; a stale entry at worst mis-picks once and self-corrects next press.
+ */
+const diskItemsCache = new Map<string, DiskItem[]>();
+
+/** Rebuild and cache an instance's disk list in the background (best-effort; failures are ignored) */
+const refreshDiskCache = async (serverId: string): Promise<void> => {
+	const conn = getConnection();
+	if (!hasConnection(conn)) {
+		return;
+	}
+	try {
+		diskItemsCache.set(serverId, await buildDiskItems(conn, serverId));
+	} catch {
+		// keep whatever is cached
+	}
+};
+
+/**
+ * Authoritative current disk selection per key (action.id). Advanced synchronously on every cycle
+ * press so rapid taps continue from the last tap rather than re-reading the not-yet-persisted
+ * settings (which would keep resolving to the same "next" and get stuck). Kept in sync with
+ * property-inspector changes via onDidReceiveSettings.
+ */
+const diskSelectionState = new Map<string, string>();
+
+/**
+ * Debounce timers (per key) for the post-cycle data load. Rapid taps update the loading frame
+ * instantly but only fire one poll for the final disk once tapping settles — so intermediate
+ * fetches never race and leave the key stuck on a disk the user tapped past.
+ */
+const cycleFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const CYCLE_FETCH_DEBOUNCE_MS = 300;
 
 type AnyEvent<S extends BaseActionSettings> =
 	| WillAppearEvent<S>
@@ -245,6 +313,11 @@ export class InstanceMetric extends InstanceAction<MetricSettings> {
 	protected async fetchImage(conn: OpenStackConnection, settings: MetricSettings, serverId: string): Promise<string> {
 		// When nothing is selected, default to the first catalog entry (cpu_percent), matching the PI dropdown default
 		const def = getMetricDef(settings.metric) ?? METRIC_CATALOG[0];
+		// Warm the disk-cycle cache on the first successful poll (connection is ready here), so the
+		// first cycle press is a cache hit and switches instantly rather than falling back to a fetch.
+		if ((def.key === "disk" || def.key === "disk_io") && !diskItemsCache.has(serverId)) {
+			void refreshDiskCache(serverId);
+		}
 		const result = await resolveMetric(conn, serverId, def, settings.diskSelection);
 		if (!result) {
 			return renderMessage(["No", "data"]);
@@ -261,6 +334,89 @@ export class InstanceMetric extends InstanceAction<MetricSettings> {
 		return renderMetric(label, result.text, result.unit, result.level);
 	}
 
+	/** Keep the cycle's current-selection state in sync with property-inspector changes */
+	override onDidReceiveSettings(ev: DidReceiveSettingsEvent<MetricSettings>): void {
+		super.onDidReceiveSettings(ev);
+		diskSelectionState.set(ev.action.id, ev.payload.settings.diskSelection?.trim() || "all");
+	}
+
+	/** Drop this key's cycle state and any pending debounced load when it goes away */
+	override onWillDisappear(ev: WillDisappearEvent<MetricSettings>): void {
+		super.onWillDisappear(ev);
+		const id = ev.action.id;
+		const pending = cycleFetchTimers.get(id);
+		if (pending) {
+			clearTimeout(pending);
+			cycleFetchTimers.delete(id);
+		}
+		diskSelectionState.delete(id);
+	}
+
+	/**
+	 * Disk / Disk I/O keys with more than one disk cycle the selection on a short press
+	 * (All disks → Root → each volume → back to All), matching the PI dropdown order.
+	 * Other metrics (and single-disk instances) keep the default refresh-on-press behavior.
+	 *
+	 * Switching feels instant and stays correct under rapid taps: the next disk is picked from an
+	 * in-memory state (advanced synchronously, so back-to-back taps keep moving forward) and the new
+	 * label is painted immediately, while the actual data load is debounced to a single poll for the
+	 * disk the user lands on — no racing fetches, so it never sticks on one they tapped past.
+	 */
+	protected override async onShortPress(ev: KeyUpEvent<MetricSettings>): Promise<void> {
+		const settings = ev.payload.settings;
+		const conn = getConnection();
+		const serverId = settings.serverId?.trim();
+		if ((settings.metric !== "disk" && settings.metric !== "disk_io") || !hasConnection(conn) || !serverId) {
+			await this.poll(ev);
+			return;
+		}
+
+		// Prefer the cached list (instant); only hit the network the very first time it is missing.
+		// Even then, use the same dots frame (with a generic title) so the loading look never differs.
+		let items = diskItemsCache.get(serverId);
+		if (!items) {
+			await ev.action.setImage(renderMetricLoading(getMetricDef(settings.metric)?.label ?? "Disk"));
+			try {
+				items = await buildDiskItems(conn, serverId);
+				diskItemsCache.set(serverId, items);
+			} catch {
+				await this.poll(ev);
+				return;
+			}
+		}
+
+		// values[0] is always "all"; cycling is only meaningful with ≥2 real disks (length > 2),
+		// otherwise "all" and the single disk show the same thing.
+		if (items.length <= 2) {
+			await this.poll(ev);
+			return;
+		}
+
+		const id = ev.action.id;
+		// State wins over settings (which may lag a rapid tap); findIndex === -1 wraps to 0 = "all"
+		const current = (diskSelectionState.get(id) ?? settings.diskSelection?.trim()) || "all";
+		const next = items[(items.findIndex((i) => i.value === current) + 1) % items.length];
+		diskSelectionState.set(id, next.value); // advance now so the next rapid tap continues from here
+		settings.diskSelection = next.value; // the debounced poll reads this ev's settings
+
+		// Instant per-tap feedback; the (single) data load waits until tapping settles.
+		await ev.action.setImage(renderMetricLoading(next.title));
+		const pending = cycleFetchTimers.get(id);
+		if (pending) {
+			clearTimeout(pending);
+		}
+		cycleFetchTimers.set(
+			id,
+			setTimeout(() => {
+				cycleFetchTimers.delete(id);
+				void ev.action.setSettings(ev.payload.settings); // persist the final selection once
+				this.startMonitoring(ev); // one poll for the landed disk; also re-arms recurring polling
+			}, CYCLE_FETCH_DEBOUNCE_MS),
+		);
+		// keep the cached list fresh for the next press in case disks were attached/detached
+		void refreshDiskCache(serverId);
+	}
+
 	/**
 	 * sdpi-components datasource: the PI's Disk dropdown asks for { event: "getDisks" }
 	 * and expects { event: "getDisks", items: [{label, value}] } back.
@@ -270,35 +426,21 @@ export class InstanceMetric extends InstanceAction<MetricSettings> {
 		if (payload?.event !== "getDisks") {
 			return;
 		}
-		const items: Array<{ label: string; value: string }> = [{ label: "All disks", value: "all" }];
+		let items: DiskItem[] = [{ label: "All disks", value: "all", title: "All" }];
 		try {
 			const conn = getConnection();
 			const settings = await ev.action.getSettings();
 			const serverId = settings.serverId?.trim();
 			if (hasConnection(conn) && serverId) {
-				const [ids, vols, server] = await Promise.all([
-					listInstanceMetrics(conn, serverId).catch(() => ({}) as Record<string, string>),
-					getAttachedVolumes(conn, serverId).catch(() => null),
-					getServer(conn, serverId).catch(() => null),
-				]);
-				const rootId = ids["disk.root.size"];
-				// Boot-from-volume: the flavor root disk is phantom (the boot disk is a volume) — no Root option
-				if (rootId && server && !server.bootFromVolume) {
-					const root = await getMeasureById(conn, rootId).catch(() => null);
-					if (root && root.value > 0) {
-						items.push({ label: `Root disk · ${Math.round(root.value)} GB`, value: "root" });
-					}
-				}
-				for (const v of vols?.volumes ?? []) {
-					const device = v.device.split("/").pop() ?? "";
-					const name = device || v.name || v.id.slice(0, 8);
-					items.push({ label: `${name} · ${v.sizeGb} GB`, value: v.id });
-				}
+				items = await buildDiskItems(conn, serverId);
+				diskItemsCache.set(serverId, items); // opportunistically warm the cycle cache
 			}
 		} catch {
 			// Fall back to the "All disks" item only; the dropdown stays usable
 		}
-		await streamDeck.ui.sendToPropertyInspector({ event: "getDisks", items });
+		// The dropdown only needs label + value; `title` is internal to the cycle behavior
+		const options = items.map(({ label, value }) => ({ label, value }));
+		await streamDeck.ui.sendToPropertyInspector({ event: "getDisks", items: options });
 	}
 }
 

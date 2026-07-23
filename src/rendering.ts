@@ -364,6 +364,27 @@ export const renderMetricWithSparkline = (
 };
 
 /**
+ * Transitional metric key: the (new) label on top plus three dots, shown the instant a disk-cycle
+ * press switches the selection — so the switch reads as immediate while the real value loads.
+ */
+export const renderMetricLoading = (label: string): string => {
+	const { canvas, ctx } = newCanvas();
+	drawBackground(ctx, "#1f2937");
+	drawTopLabel(ctx, label, true);
+
+	const cy = 96;
+	const r = 5;
+	const gap = 18;
+	for (let i = -1; i <= 1; i++) {
+		ctx.beginPath();
+		ctx.arc(SIZE / 2 + i * gap, cy, r, 0, Math.PI * 2);
+		ctx.fillStyle = i === 0 ? COLOR.label : COLOR.idleLabel;
+		ctx.fill();
+	}
+	return canvas.toDataURL();
+};
+
+/**
  * Status message key (e.g. "Set up connection", "Auth failed"), centered multi-line text.
  */
 export const renderMessage = (lines: string[]): string => {
